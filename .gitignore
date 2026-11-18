@@ -4,3 +4,5 @@ results/ckpt/
 results/log*.txt
 results/smoke.json
 results/cue_conflict_anchors.json
+reproduced_revision/
+figures/initial/

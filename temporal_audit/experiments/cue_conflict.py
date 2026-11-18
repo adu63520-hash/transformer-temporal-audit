@@ -1,32 +1,15 @@
-"""
-cue_conflict.py -- cue-conflict test (no input is permuted).
+"""Evaluate forcing-period transfer with the fixed recurrence."""
+import argparse
+import json
+from pathlib import Path
+import time
 
-Models are trained on the fixed-forcing task (24 h forcing period). At test time the forcing period is
-changed. The recurrence that defines beta is untouched, so a predictor that uses consecutive readings
-(OLS) stays unbiased; a predictor that uses order-free amplitude statistics is thrown off, because the
-mapping from amplitudes to beta depends on the forcing period. We ask on which side each Transformer falls.
-
-    python cue_conflict.py            # trains 3 models (~6 min each, skipped if already saved), then evaluates
-Outputs: results/cue_conflict.json, checkpoints in results/ckpt/
-"""
-import json, os, sys, time
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE); os.chdir(HERE)
-import tasks as T  # noqa: E402
+from .. import tasks as T
 
 PERIODS = [24, 20, 16, 12, 8]
 REPS, STEPS, SEED = 30, 3000, 0
-RES = os.path.join(HERE, "results"); CK = os.path.join(RES, "ckpt")
-LOG = os.path.join(RES, "log_cue_conflict.txt")
-
-
-def log(msg):
-    line = time.strftime("%H:%M:%S ") + str(msg)
-    print(line, flush=True)
-    with open(LOG, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
 
 
 def summarise(pred, beta):
@@ -40,6 +23,21 @@ def summarise(pred, beta):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--results-dir", type=Path, default=Path("results"))
+    parser.add_argument("--checkpoints", type=Path)
+    parser.add_argument("--anchors-only", action="store_true")
+    args = parser.parse_args()
+    results_dir = args.results_dir
+    results_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints = args.checkpoints or results_dir / "ckpt"
+
+    def log(message):
+        line = time.strftime("%H:%M:%S ") + message
+        print(line, flush=True)
+        with (results_dir / "log_cue_conflict.txt").open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+
     sets = {p: T.make_period_dataset(p, REPS, seed=4000 + p) for p in PERIODS}
     out = {"periods": PERIODS, "reps": REPS, "anchors": {}, "models": {}}
 
@@ -50,21 +48,22 @@ def main():
         out["anchors"][name] = {str(p): summarise(f(d["bins"]), d["beta"]) for p, d in sets.items()}
         log(f"anchor {name:17s} median pred/true by period: " +
             "  ".join(f"{p}h {out['anchors'][name][str(p)]['median_ratio']:.2f}" for p in PERIODS))
-    if "--anchors-only" in sys.argv:
-        json.dump(out, open(os.path.join(RES, "cue_conflict_anchors.json"), "w"), indent=1); return
+    if args.anchors_only:
+        (results_dir / "cue_conflict_anchors.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+        return
 
     # ---- Transformers ----
     import torch
-    from train_tf import run, GPTRegressor, predict
+    from ..train_tf import run, GPTRegressor, predict
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log(f"torch {torch.__version__} on {device}")
     for cond in ("clean", "time", "full"):
-        ck = os.path.join(CK, f"orig_{cond}_s{SEED}.pt")
-        if not os.path.exists(ck):
+        ck = checkpoints / f"orig_{cond}_s{SEED}.pt"
+        if not ck.exists():
             log(f"training orig/{cond} (seed {SEED}, {STEPS} steps) ...")
-            run("orig", cond, SEED, os.path.join(RES, "runs_ckpt", f"orig_{cond}_s{SEED}.json"),
+            run("orig", cond, SEED, results_dir / "runs_ckpt" / f"orig_{cond}_s{SEED}.json",
                 steps=STEPS, log=log, ckpt_path=ck)
-        c = torch.load(ck, map_location=device, weights_only=False)
+        c = torch.load(ck, map_location=device, weights_only=True)
         model = GPTRegressor(c["d"], c["layers"], c["heads"], c["embed"]).to(device)
         model.load_state_dict(c["model"]); model.eval()
         res = {}
@@ -78,9 +77,9 @@ def main():
             "  ".join(f"{p}h {res[str(p)]['ordered']['median_ratio']:.2f}" for p in PERIODS))
         log(f"model  {cond:6s} ordered inputs, MRE by period:              " +
             "  ".join(f"{p}h {res[str(p)]['ordered']['mre']:.3f}" for p in PERIODS))
-    with open(os.path.join(RES, "cue_conflict.json"), "w", encoding="utf-8") as f:
+    with (results_dir / "cue_conflict.json").open("w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
-    log("=== CUE CONFLICT DONE -> results/cue_conflict.json")
+    log(f"Saved {results_dir / 'cue_conflict.json'}")
 
 
 if __name__ == "__main__":

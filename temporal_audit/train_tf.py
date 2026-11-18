@@ -7,15 +7,13 @@ train_tf.py -- end-to-end GPT-style regressor for beta, plus the permutation rul
 At evaluation every model is scored on real / time-shuffled / fully-permuted versions of the same
 ID (interior grid) and OOD (border ring) test sets.
 """
-import json, math, os, sys, time
+import json, math, os, time
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import tasks as T  # noqa: E402
+from . import tasks as T
 
 
 class Block(nn.Module):
